@@ -20,7 +20,7 @@ func fatalIfErr(err error) {
 }
 
 type Config struct {
-	HostKey string `yaml:"HostKey"`
+	HostKeyLocation string `yaml:"HostKeyLocation"`
 
 	MySQL string `yaml:"MySQL"`
 
@@ -56,14 +56,11 @@ func main() {
 		PublicKeyCallback:           server.PublicKeyCallback,
 	}
 
-	privateBytes, err := ioutil.ReadFile("id_rsa")
+	privateBytes, err := ioutil.ReadFile(C.HostKeyLocation)
 	if err != nil {
 		log.Fatal("Failed to load private key: ", err)
 	}
-
 	private, err := ssh.ParsePrivateKey(privateBytes)
-
-	//private, err := ssh.ParsePrivateKey([]byte(C.HostKey))
 	fatalIfErr(err)
 	server.sshConfig.AddHostKey(private)
 

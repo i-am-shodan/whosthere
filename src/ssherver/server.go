@@ -4,7 +4,6 @@ import (
 	//"database/sql"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net"
 	"os"
 	"sync"
@@ -89,7 +88,7 @@ func (s *Server) Handle(nConn net.Conn) {
 	s.mu.RUnlock()
 
 	le.Username = conn.User()
-	le.ClientVersion = conn.ClientVersion()
+	le.ClientVersion = string(conn.ClientVersion())
 	for _, key := range si.Keys {
 		le.KeysOffered = append(le.KeysOffered, string(ssh.MarshalAuthorizedKey(key)))
 	}

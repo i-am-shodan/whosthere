@@ -1,0 +1,4 @@
+HostKeyLocation : "id_rsa"
+MySQL : "user:password1234@/testdb"
+Listen : "127.0.0.1:2222"
+Debug : "true"
