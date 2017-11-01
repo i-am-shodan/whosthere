@@ -1,114 +1,17 @@
 package main
 
 import (
-	"database/sql"
+	//"database/sql"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
-	"strings"
 	"sync"
-	"text/template"
 	"time"
 
-	"github.com/google/go-github/github"
 	"golang.org/x/crypto/ssh"
 )
-
-var termTmpl = template.Must(template.New("termTmpl").Parse(strings.Replace(`
-    +---------------------------------------------------------------------+
-    |                                                                     |
-    |             _o/ Hello {{ .Name }}!
-    |                                                                     |
-    |                                                                     |
-    |  Did you know that ssh sends all your public keys to any server     |
-    |  it tries to authenticate to?                                       |
-    |                                                                     |
-    |  That's how we know you are @{{ .User }} on GitHub!
-    |                                                                     |
-    |  Ah, maybe what you didn't know is that GitHub publishes all users' |
-    |  ssh public keys and Ben (benjojo.co.uk) grabbed them all.          |
-    |                                                                     |
-    |  That's pretty handy at times :) for example your key is at         |
-    |  https://github.com/{{ .User }}.keys
-    |                                                                     |
-    |                                                                     |
-    |  P.S. This whole thingy is Open Source! (And written in Go!)        |
-    |  https://github.com/FiloSottile/whosthere                           |
-    |                                                                     |
-    |  -- @FiloSottile (https://twitter.com/FiloSottile)                  |
-    |                                                                     |
-    +---------------------------------------------------------------------+
-
-`, "\n", "\n\r", -1)))
-
-var failedMsg = []byte(strings.Replace(`
-    +---------------------------------------------------------------------+
-    |                                                                     |
-    |             _o/ Hello!                                              |
-    |                                                                     |
-    |                                                                     |
-    |  Did you know that ssh sends all your public keys to any server     |
-    |  it tries to authenticate to? You can see yours echoed below.       |
-    |                                                                     |
-    |  We tried to use that to find your GitHub username, but we          |
-    |  couldn't :( maybe you don't even have GitHub ssh keys, do you?     |
-    |                                                                     |
-    |  By the way, did you know that GitHub publishes all users'          |
-    |  ssh public keys and Ben (benjojo.co.uk) grabbed them all?          |
-    |                                                                     |
-    |  That's pretty handy at times :) But not this time :(               |
-    |                                                                     |
-    |                                                                     |
-    |  P.S. This whole thingy is Open Source! (And written in Go!)        |
-    |  https://github.com/FiloSottile/whosthere                           |
-    |                                                                     |
-    |  -- @FiloSottile (https://twitter.com/FiloSottile)                  |
-    |                                                                     |
-    +---------------------------------------------------------------------+
-
-`, "\n", "\n\r", -1))
-
-var agentMsg = []byte(strings.Replace(`
-                      ***** WARNING ***** WARNING *****
-
-         You have SSH agent forwarding turned (universally?) on. That
-        is a VERY BAD idea. For example right now I have access to your
-        agent and I can use your keys however I want as long as you are
-       connected. I'm a good guy and I won't do anything, but ANY SERVER
-        YOU LOG IN TO AND ANYONE WITH ROOT ON THOSE SERVERS CAN LOGIN AS
-                                 YOU ANYWHERE.
-
-                       Read more:  http://git.io/vO2A6
-`, "\n", "\n\r", -1))
-
-var x11Msg = []byte(strings.Replace(`
-                      ***** WARNING ***** WARNING *****
-
-            You have X11 forwarding turned (universally?) on. That
-        is a VERY BAD idea. For example right now I have access to your
-          X11 server and I can access your desktop as long as you are
-       connected. I'm a good guy and I won't do anything, but ANY SERVER
-         YOU LOG IN TO AND ANYONE WITH ROOT ON THOSE SERVERS CAN SNIFF
-                  YOUR KEYSTROKES AND ACCESS YOUR WINDOWS.
-
-     Read more:  http://www.hackinglinuxexposed.com/articles/20040705.html
-`, "\n", "\n\r", -1))
-
-var roamingMsg = []byte(strings.Replace(`
-                      ***** WARNING ***** WARNING *****
-
-    You have roaming turned on. If you are using OpenSSH, that most likely
-       means you are vulnerable to the CVE-2016-0777 information leak.
-
-   THIS MEANS THAT ANY SERVER YOU CONNECT TO MIGHT OBTAIN YOUR PRIVATE KEYS.
-
-     Add "UseRoaming no" to the "Host *" section of your ~/.ssh/config or
-           /etc/ssh/ssh_config file, rotate keys and update ASAP.
-
-Read more:  https://www.qualys.com/2016/01/14/cve-2016-0777-cve-2016-0778/openssh-cve-2016-0777-cve-2016-0778.txt
-`, "\n", "\n\r", -1))
 
 type sessionInfo struct {
 	User string
@@ -116,9 +19,9 @@ type sessionInfo struct {
 }
 
 type Server struct {
-	githubClient *github.Client
-	sshConfig    *ssh.ServerConfig
-	sqlQuery     *sql.Stmt
+	dbConnectionString string
+	sshConfig *ssh.ServerConfig
+	//sqlQuery  *sql.Stmt
 
 	mu          sync.RWMutex
 	sessionInfo map[string]sessionInfo
@@ -149,7 +52,6 @@ type logEntry struct {
 	RequestTypes  []string
 	Error         string
 	KeysOffered   []string
-	GitHub        string
 	ClientVersion string
 }
 
@@ -187,7 +89,7 @@ func (s *Server) Handle(nConn net.Conn) {
 	s.mu.RUnlock()
 
 	le.Username = conn.User()
-	le.ClientVersion = fmt.Sprintf("%x", conn.ClientVersion())
+	le.ClientVersion = conn.ClientVersion()
 	for _, key := range si.Keys {
 		le.KeysOffered = append(le.KeysOffered, string(ssh.MarshalAuthorizedKey(key)))
 	}
@@ -238,40 +140,11 @@ func (s *Server) Handle(nConn net.Conn) {
 		}(requests)
 
 		reqLock.Lock()
-		if agentFwd {
-			channel.Write(agentMsg)
-		}
-		if x11 {
-			channel.Write(x11Msg)
-		}
-		if roaming {
-			channel.Write(roamingMsg)
+
+		if le.KeysOffered != nil {
+			addToDatabase(s.dbConnectionString, le)
 		}
 
-		user, err := s.findUser(si.Keys)
-		if err != nil {
-			le.Error = "findUser failed: " + err.Error()
-			return
-		}
-
-		if user == "" {
-			channel.Write(failedMsg)
-			for _, key := range si.Keys {
-				channel.Write(ssh.MarshalAuthorizedKey(key))
-				channel.Write([]byte("\r"))
-			}
-			channel.Write([]byte("\n\r"))
-			return
-		}
-
-		le.GitHub = user
-		name, err := s.getUserName(user)
-		if err != nil {
-			le.Error = "getUserName failed: " + err.Error()
-			return
-		}
-
-		termTmpl.Execute(channel, struct{ Name, User string }{name, user})
 		return
 	}
 }

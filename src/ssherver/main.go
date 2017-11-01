@@ -8,10 +8,9 @@ import (
 	"net/http"
 	_ "net/http/pprof"
 
-	_ "github.com/go-sql-driver/mysql"
-	"github.com/google/go-github/github"
-	"golang.org/x/crypto/ssh"
 	"gopkg.in/yaml.v2"
+	_ "github.com/go-sql-driver/mysql"
+	"golang.org/x/crypto/ssh"
 )
 
 func fatalIfErr(err error) {
@@ -22,10 +21,6 @@ func fatalIfErr(err error) {
 
 type Config struct {
 	HostKey string `yaml:"HostKey"`
-
-	UserAgent    string `yaml:"UserAgent"`
-	GitHubID     string `yaml:"GitHubID"`
-	GitHubSecret string `yaml:"GitHubSecret"`
 
 	MySQL string `yaml:"MySQL"`
 
@@ -43,32 +38,32 @@ func main() {
 		log.Println(http.ListenAndServe(C.Debug, nil))
 	}()
 
-	t := &github.UnauthenticatedRateLimitedTransport{
-		ClientID:     C.GitHubID,
-		ClientSecret: C.GitHubSecret,
-	}
-	GitHubClient := github.NewClient(t.Client())
-	GitHubClient.UserAgent = C.UserAgent
-
 	db, err := sql.Open("mysql", C.MySQL)
 	fatalIfErr(err)
 	fatalIfErr(db.Ping())
 	_, err = db.Exec("SET NAMES UTF8")
 	fatalIfErr(err)
-	query, err := db.Prepare("SELECT `username` FROM keystore WHERE `N` = ? LIMIT 1")
+	
+	_, err = db.Exec("select id from events limit 1")
 	fatalIfErr(err)
 
 	server := &Server{
-		githubClient: GitHubClient,
-		sqlQuery:     query,
-		sessionInfo:  make(map[string]sessionInfo),
+		dbConnectionString: C.MySQL,
+		sessionInfo: make(map[string]sessionInfo),
 	}
 	server.sshConfig = &ssh.ServerConfig{
 		KeyboardInteractiveCallback: server.KeyboardInteractiveCallback,
 		PublicKeyCallback:           server.PublicKeyCallback,
 	}
 
-	private, err := ssh.ParsePrivateKey([]byte(C.HostKey))
+	privateBytes, err := ioutil.ReadFile("id_rsa")
+	if err != nil {
+		log.Fatal("Failed to load private key: ", err)
+	}
+
+	private, err := ssh.ParsePrivateKey(privateBytes)
+
+	//private, err := ssh.ParsePrivateKey([]byte(C.HostKey))
 	fatalIfErr(err)
 	server.sshConfig.AddHostKey(private)
 
